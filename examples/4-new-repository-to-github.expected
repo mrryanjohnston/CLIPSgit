@@ -1,0 +1,7 @@
+init:   
+commit: first commit, on master
+branch: main
+remote: origin is 
+push:   main tracks refs/remotes/origin/main
+origin has main at 
+done

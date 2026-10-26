@@ -1,0 +1,228 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A new push to a branch makes the run that is in progress for it unnecessary.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The build that the README describes first. The job downloads the pinned
+  # libgit2, checks it, and builds it statically. Then it runs the suite, the
+  # examples, and valgrind, and installs into a temporary prefix.
+  vendored:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install what the build needs
+        run: sudo apt-get update && sudo apt-get install -y cmake libssl-dev valgrind
+
+      # Never cache a build tree. vendor/clips-build holds object files. Their
+      # timestamps would be older than the sources of a new checkout, and the
+      # CLIPS sub-make would skip work that it must do. A cache of the
+      # tarballs and of the clean CLIPS source is useful. libgit2 builds in
+      # ten seconds, so a cache of its build is not useful.
+      - name: Cache the downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            vendor/libgit2-*.tar.gz
+            clips_core_source_642.tar.gz
+            vendor/clips-source
+          key: deps-${{ runner.os }}-${{ hashFiles('makefile') }}
+          restore-keys: deps-${{ runner.os }}-
+
+      - name: Build
+        run: make
+
+      - name: Report what it built against
+        run: |
+          make print-clips
+          printf '(println "libgit2 " (git-libgit2-version) " " (git-libgit2-features))\n(exit)\n' > version.bat
+          ./vendor/clips/clips -f2 version.bat
+
+      # The vendored build has HTTPS and the ssh transport. One clone of a
+      # small public repository over HTTPS shows that the network path works
+      # with no credential. The runner has network access: the build above
+      # downloaded libgit2 from GitHub.
+      - name: Clone a public repository over HTTPS
+        run: |
+          ./vendor/clips/clips -f2 version.bat | grep -q GIT_FEATURE_SSH
+          printf '(if (git-clone "https://github.com/libgit2/TestGitRepository" "smoke-clone") then (println "cloned") else (exit 1))\n(exit)\n' > smoke.bat
+          ./vendor/clips/clips -f2 smoke.bat
+
+      # A static check of the sources, so it runs before the suite. An API.md
+      # that is not current gives a faster and clearer failure than the tests
+      # would.
+      - name: Check API.md is current
+        run: make docs-check
+
+      - name: Run the test suite and the examples
+        run: make test
+
+      # The same suite again under valgrind. There, a wrapper that reads freed
+      # memory and then returns the correct value is a failure.
+      - name: Run the in-process suite under valgrind
+        run: make test-valgrind
+
+      # "make install" is the one path in the README that no other step tests.
+      # A temporary PREFIX shows that the wrapper is generated, is on PATH,
+      # and can run a real script without vendor/. libgit2 is inside the
+      # binary, so nothing else is necessary.
+      - name: Install into a temporary prefix
+        run: |
+          set -eux
+          prefix="$(mktemp -d)"
+          make install PREFIX="$prefix"
+          test -x "$prefix/bin/CLIPSgit"
+          "$prefix/bin/CLIPSgit" --version
+          printf '(println "libgit2 " (git-libgit2-version))\n(exit)\n' > /tmp/version.bat
+          mv vendor vendor.hidden
+          "$prefix/bin/CLIPSgit" -f2 /tmp/version.bat
+          mv vendor.hidden vendor
+          make uninstall PREFIX="$prefix"
+          test ! -e "$prefix/bin/CLIPSgit"
+
+  # Every supported libgit2 release, from the download to the tests. Each
+  # release is one tarball. So the matrix runs the releases in parallel.
+  # Locally, test-versions.sh runs them one after the other.
+  releases:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        libgit2: ['1.8.7', '1.9.6', '1.9.7']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install what the build needs
+        run: sudo apt-get update && sudo apt-get install -y cmake libssl-dev
+
+      - name: Cache the downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            vendor/libgit2-${{ matrix.libgit2 }}.tar.gz
+            clips_core_source_642.tar.gz
+            vendor/clips-source
+          key: libgit2-${{ matrix.libgit2 }}-${{ runner.os }}-${{ hashFiles('makefile') }}
+
+      - name: Build against libgit2 ${{ matrix.libgit2 }}
+        run: make LIBGIT2_VERSION=${{ matrix.libgit2 }}
+
+      - name: Run the test suite and the examples
+        run: make LIBGIT2_VERSION=${{ matrix.libgit2 }} test
+
+  # Every CLIPS that the wrappers build against: the 6.4.2 release and the two
+  # Subversion branches at the revisions that the makefile pins. The
+  # interpreter is the variable here, so one libgit2 (the pinned one) serves
+  # all three.
+  clips:
+    name: clips (${{ matrix.clips }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        clips: ['6.4.2', svn-6x, svn-7x]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install what the build needs
+        run: sudo apt-get update && sudo apt-get install -y cmake libssl-dev subversion
+
+      - name: Cache the downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            vendor/libgit2-*.tar.gz
+            clips_core_source_642.tar.gz
+            vendor/clips-source
+          key: clips-${{ matrix.clips }}-${{ runner.os }}-${{ hashFiles('makefile') }}
+          restore-keys: clips-${{ matrix.clips }}-${{ runner.os }}-
+
+      - name: Build against CLIPS ${{ matrix.clips }}
+        run: make CLIPS_VERSION=${{ matrix.clips }}
+
+      - name: Report what it built against
+        run: make print-clips CLIPS_VERSION=${{ matrix.clips }}
+
+      - name: Run the test suite and the examples
+        run: make CLIPS_VERSION=${{ matrix.clips }} test
+
+  # Coverage is about userfunctions.c, not about the library under it. So it
+  # runs against the defaults only.
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install what the build needs
+        run: sudo apt-get update && sudo apt-get install -y cmake libssl-dev
+
+      - name: Cache the downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            vendor/libgit2-*.tar.gz
+            clips_core_source_642.tar.gz
+            vendor/clips-source
+          key: deps-${{ runner.os }}-${{ hashFiles('makefile') }}
+          restore-keys: deps-${{ runner.os }}-
+
+      - name: Report coverage of userfunctions.c
+        run: make coverage
+
+  # The other path in the README. The job links the libgit2 that the machine
+  # has, and downloads nothing. The libgit2 in Ubuntu is 1.7 or 1.8, which
+  # depends on the release. So this also tests the version check in
+  # userfunctions.c.
+  system-library:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install libgit2 from the distribution
+        run: sudo apt-get update && sudo apt-get install -y libgit2-dev pkg-config
+
+      - name: Cache the CLIPS download
+        uses: actions/cache@v4
+        with:
+          path: |
+            clips_core_source_642.tar.gz
+            vendor/clips-source
+          key: clips-${{ runner.os }}-${{ hashFiles('makefile') }}
+          restore-keys: clips-${{ runner.os }}-
+
+      # A distribution with a libgit2 older than 1.8 fails the version check
+      # at compile time. That is the correct result for it. The step reports
+      # that and stops. It does not fail the workflow for a decision of the
+      # distribution.
+      - name: Build against the system library
+        run: |
+          v="$(pkg-config --modversion libgit2)"
+          echo "system libgit2 is $v"
+          case "$v" in
+            0.*|1.[0-7].*)
+              echo "too old for CLIPSgit (1.8 or later is needed); nothing to test here"
+              exit 0 ;;
+          esac
+          make LIBGIT2_SYSTEM=1
+          make LIBGIT2_SYSTEM=1 test

@@ -1,0 +1,41 @@
+A patch for libgit2, applied by scripts/patch-libgit2.sh.
+
+git_blame_file looks the newest commit up, then the blob at the path in
+it. If the path is not in that commit, the blame is freed, but the commit
+is not: git_blame_free does not free it, because on the good path the
+first origin takes it and frees it. valgrind reports this after a blame of
+a path that does not exist. The fix frees the commit when the blob lookup
+fails, gives the commit to the origin with a NULL in the blame, and frees
+what is still in the blame at the end.
+
+--- a/src/libgit2/blame.c
++++ b/src/libgit2/blame.c
+@@ -180,6 +180,7 @@
+ 	git_mailmap_free(blame->mailmap);
+ 
+ 	git__free(blame->path);
++	git_commit_free(blame->final);
+ 	git_blob_free(blame->final_blob);
+ 	git__free(blame);
+ }
+@@ -419,6 +420,10 @@
+ 		goto cleanup;
+ 	error = git_object_lookup_bypath((git_object**)&blame->final_blob,
+ 			(git_object*)blame->final, blame->path, GIT_OBJECT_BLOB);
++	if (error < 0) {
++		git_commit_free(blame->final);
++		blame->final = NULL;
++	}
+ 
+ cleanup:
+ 	return error;
+@@ -434,6 +439,9 @@
+ 	    (error = git_blame__get_origin(&o, blame, blame->final, blame->path)) < 0)
+ 		goto on_error;
+ 
++	/* The origin owns the commit now, and frees it with itself. */
++	blame->final = NULL;
++
+ 	if (git_blob_rawsize(blame->final_blob) > SIZE_MAX) {
+ 		git_error_set(GIT_ERROR_NOMEMORY, "blob is too large to blame");
+ 		error = -1;

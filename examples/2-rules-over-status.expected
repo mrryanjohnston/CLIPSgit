@@ -1,0 +1,9 @@
+4 changes in the working directory
+add: docs/guide.md
+add: src/main.c
+ask: src/old.c
+leave: scratch.txt
+committed
+with the approved changes
+2 left uncommitted
+done

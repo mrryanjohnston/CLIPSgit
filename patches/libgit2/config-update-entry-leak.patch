@@ -1,0 +1,35 @@
+A patch for libgit2, applied by scripts/patch-libgit2.sh.
+
+git_config__update_entry looks an entry up and then returns early on four
+paths. Three of them can hold an entry, and none of them frees it. The entry
+keeps a reference to the list of the configuration file, so the list is
+lost with it. valgrind reports this after git_submodule_init and
+git_submodule_sync. The fix frees the entry on every path.
+
+--- a/src/libgit2/config.c
++++ b/src/libgit2/config.c
+@@ -744,19 +744,20 @@
+ 		return error;
+ 
+ 	if (!ce && only_if_existing) /* entry doesn't exist */
+-		return 0;
++		goto out;
+ 	if (ce && !overwrite_existing) /* entry would be overwritten */
+-		return 0;
++		goto out;
+ 	if (value && ce && ce->value && !strcmp(ce->value, value)) /* no change */
+-		return 0;
++		goto out;
+ 	if (!value && (!ce || !ce->value)) /* asked to delete absent entry */
+-		return 0;
++		goto out;
+ 
+ 	if (!value)
+ 		error = git_config_delete_entry(config, key);
+ 	else
+ 		error = git_config_set_string(config, key, value);
+ 
++out:
+ 	git_config_entry_free(ce);
+ 	return error;
+ }

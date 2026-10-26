@@ -1,0 +1,6 @@
+before: 3 commits on master, remotes ()
+remote: origin is 
+branch: main
+push:   main tracks refs/remotes/origin/main
+origin has 3 commits on main
+done

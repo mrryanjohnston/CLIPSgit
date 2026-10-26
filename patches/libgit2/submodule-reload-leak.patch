@@ -1,0 +1,26 @@
+A patch for libgit2, applied by scripts/patch-libgit2.sh.
+
+submodule_read_config copies the url and the branch of a submodule with
+git__strdup, and does not free the copy that a previous read made. A
+lookup of an initialised submodule reads two files, so the copy from the
+first is lost. The fix frees the old copy first, as the code does for the
+path.
+
+--- a/src/libgit2/submodule.c
++++ b/src/libgit2/submodule.c
+@@ -2101,6 +2101,7 @@
+ 		/* We would warn here if we had that API */
+ 		if (!looks_like_command_line_option(value)) {
+ 			in_config = 1;
++			git__free(sm->url);
+ 			sm->url = git__strdup(value);
+ 			GIT_ERROR_CHECK_ALLOC(sm->url);
+ 		}
+@@ -2110,6 +2111,7 @@
+ 
+ 	if ((error = get_value(&value, cfg, &key, sm->name, "branch")) == 0) {
+ 		in_config = 1;
++		git__free(sm->branch);
+ 		sm->branch = git__strdup(value);
+ 		GIT_ERROR_CHECK_ALLOC(sm->branch);
+ 	} else if (error != GIT_ENOTFOUND) {

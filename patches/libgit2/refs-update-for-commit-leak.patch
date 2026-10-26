@@ -1,0 +1,17 @@
+A patch for libgit2, applied by scripts/patch-libgit2.sh.
+
+git_reference__update_for_commit looks a commit up for the reflog message.
+If the reference to update is symbolic, it returns without freeing the
+commit. The fix goes to the label that frees it.
+
+--- a/src/libgit2/refs.c
++++ b/src/libgit2/refs.c
+@@ -1195,7 +1195,7 @@
+ 
+ 	if (ref) {
+ 		if ((error = ensure_is_an_updatable_direct_reference(ref)) < 0)
+-			return error;
++			goto done;
+ 
+ 		error = reference__create(&ref_new, repo, ref->name, id, NULL, 1, who,
+ 					  git_str_cstr(&reflog_msg), &ref->target.oid, NULL);
