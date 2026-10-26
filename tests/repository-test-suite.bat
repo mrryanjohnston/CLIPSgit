@@ -105,10 +105,21 @@
   ; The extended init, with a description and an initial branch name.
   (bind ?ext (git-repository-init-ext "tests/tmp/ext" (create$ GIT_REPOSITORY_INIT_MKPATH) "trunk" "a description"))
   (expect-true "git-repository-init-ext makes a repository" (external-addressp ?ext))
+  ; This repository does not come from make-repo, so it has no identity. The
+  ; commit below gives nil for the author. Without an identity in the
+  ; repository, nil falls back to the global configuration of this machine,
+  ; and on a machine with none the commit is refused. So the identity is set
+  ; here, as make-repo sets it.
+  (bind ?cfg (git-repository-config ?ext))
+  (git-config-set-string ?cfg "user.name" "Test User")
+  (git-config-set-string ?cfg "user.email" "test@example.com")
+  (git-config-free ?cfg)
   (commit-file ?ext "x" "x" "x")
   (bind ?head (git-repository-head ?ext))
-  (expect "with the initial head it was given" "refs/heads/trunk" (git-reference-name ?head))
-  (git-reference-free ?head)
+  (expect-true "and the head can be read after a commit" (external-addressp ?head))
+  (bind ?name (if ?head then (git-reference-name ?head) else FALSE))
+  (expect "with the initial head it was given" "refs/heads/trunk" ?name)
+  (if ?head then (git-reference-free ?head))
   (git-repository-free ?ext)
 
   ; A repository that does not exist.
